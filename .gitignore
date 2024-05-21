@@ -126,3 +126,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+#charts
+solution/service_dds/app/values.yaml
+solution/service_cdm/app/values.yaml
