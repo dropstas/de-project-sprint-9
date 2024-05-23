@@ -1,10 +1,15 @@
 import sys, os
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 from datetime import datetime
 import logging
-from lib.kafka_connect import KafkaConsumer, KafkaProducer
+from lib.kafka_connect import KafkaConsumer
+from lib.kafka_connect import KafkaProducer
 from dds_loader.repository import DdsRepository
+from dds_loader.repository.dds_repository import DdsRepository, OrderDdsBuilder
+from typing import Dict, Any, List
+
 
 
 
@@ -12,130 +17,106 @@ class DdsMessageProcessor:
     def __init__(self,
                  consumer: KafkaConsumer,
                  producer: KafkaProducer,
-                 dds_repository: DdsRepository,
-                 batch_size: int,
+                 dds: DdsRepository,
                  logger: logging.Logger) -> None:
         self._consumer = consumer
         self._producer = producer
-        self._dds_repository = dds_repository
-        self._batch_size = 30
+        self._repository = dds
+
         self._logger = logger
-
-
+        self._batch_size = 1
 
     def run(self) -> None:
-        
         self._logger.info(f"{datetime.utcnow()}: START")
 
-        load_dt = datetime.utcnow()
-        load_src = "KFK"
-
-
-        for _ in range(25):
+        for _ in range(self._batch_size):
             msg = self._consumer.consume()
             if not msg:
+                self._logger.info(f"{datetime.utcnow()}: NO messages. Quitting.")
                 break
-            self._logger.info(f"{datetime.utcnow()}: Kafka consumer number {_} done. Message: {msg}")
 
-            #h_user insert
-            user_id = msg['payload']['user']['id']
-            h_user_pk = self._hash_generate(user_id)
-            self._dds_repository.h_user(user_id, h_user_pk)
-            self._logger.info(f"{datetime.utcnow()}: User id = {user_id} has been inserted")
+            self._logger.info(f"{datetime.utcnow()}: {msg}")
 
-            #s_user_names insert
-            username = msg['payload']['user']['name']
-            userlogin = msg['payload']['user']['login']
-            hk_user_names_hashdiff = self._hash_generate(h_user_pk, username, userlogin, load_dt, load_src)
-            self._dds_repository.s_user_names(h_user_pk, username, userlogin, hk_user_names_hashdiff)
-            self._logger.info(f"{datetime.utcnow()}: User name info has been inserted")
+            order_dict = msg['payload']
+            builder = OrderDdsBuilder(order_dict)
 
-            #h_order insert
-            order_id = msg['payload']['id']
-            order_dt = msg['payload']['date']
-            h_order_pk = self._hash_generate(order_id)
-            self._dds_repository.h_order(order_id, order_dt, h_order_pk)
-            self._logger.info(f"{datetime.utcnow()}: Order id = {order_id} has been inserted")
+            self._load_hubs(builder)
+            self._load_links(builder)
+            self._load_sats(builder)
 
-            #s_order_cost
-            order_cost = msg['payload']['cost']
-            order_payment = msg['payload']['payment']
-            hk_order_cost_hashdiff = self._hash_generate(h_order_pk, order_cost, order_payment, load_dt, load_src)
-            self._dds_repository.s_order_cost(h_order_pk, order_cost, order_payment, hk_order_cost_hashdiff)
-            self._logger.info(f"{datetime.utcnow()}: Order info has been inserted")
-
-            #s_order_status
-            order_status = msg['payload']['status']
-            hk_order_status_hashdiff = self._hash_generate(h_order_pk, order_status, load_dt, load_src)
-            self._dds_repository.s_order_status(h_order_pk, order_status, hk_order_status_hashdiff)
-            self._logger.info(f"{datetime.utcnow()}: Order status has been inserted")
-
-            #h_restaurant insert
-            restaurant_id = msg['payload']['restaurant']['id']
-            h_restaurant_pk = self._hash_generate(restaurant_id)
-            self._dds_repository.h_restaurant(restaurant_id, h_restaurant_pk)
-            self._logger.info(f"{datetime.utcnow()}: Restaurant id = {restaurant_id} has been inserted")
-
-            #s_restaurant_names
-            restaurant_name = msg['payload']['restaurant']['name']
-            hk_restaurant_names_hashdiff = self._hash_generate(h_restaurant_pk, restaurant_name, load_dt, load_src)
-            self._dds_repository.s_restaurant_names(h_restaurant_pk, restaurant_name, hk_restaurant_names_hashdiff)
-            self._logger.info(f"{datetime.utcnow()}: Restaurant name info has been inserted")
-
-                    
-            #l_order_user insert
-            hk_order_user_pk = self._hash_generate(order_id, user_id)
-            self._dds_repository.l_order_user(hk_order_user_pk, h_order_pk, h_user_pk)
-            self._logger.info(f"{datetime.utcnow()}: link order_user has been inserted")
-
-            for row in msg['payload']['products']:
-                
-                #h_product insert
-                product_id = row['id']
-                h_product_pk = self._hash_generate(product_id)
-                self._dds_repository.h_product(product_id, h_product_pk)
-                self._logger.info(f"{datetime.utcnow()}: Product id = {product_id} has been inserted")
-
-                #s_product_names
-                name = row['name']
-                hk_product_names_hashdiff = self._hash_generate(h_product_pk, name, load_dt, load_src)
-                self._dds_repository.s_product_names(h_product_pk, name, hk_product_names_hashdiff)
-                self._logger.info(f"{datetime.utcnow()}: Product name info has been inserted")
-
-            
-                #h_category insert
-                category_name = row['category']
-                h_category_pk = self._hash_generate(category_name)
-                self._dds_repository.h_category(category_name, h_category_pk)
-                self._logger.info(f"{datetime.utcnow()}: Category name = {category_name} has been inserted")
-
-                #l_order_product insert
-                hk_order_product_pk = self._hash_generate(order_id, product_id)
-                self._dds_repository.l_order_product(hk_order_product_pk, h_order_pk, h_product_pk)
-                self._logger.info(f"{datetime.utcnow()}: link order_product has been inserted")
-
-                #l_product_restaurant insert
-                hk_product_restaurant_pk = self._hash_generate(restaurant_id, product_id)
-                self._dds_repository.l_product_restaurant(hk_product_restaurant_pk, h_restaurant_pk, h_product_pk)
-                self._logger.info(f"{datetime.utcnow()}: link product_restaurant has been inserted")
-
-                #l_product_category insert
-                hk_product_category_pk = self._hash_generate(category_name, product_id)
-                self._dds_repository.l_product_category(hk_product_category_pk, h_category_pk, h_product_pk)
-                self._logger.info(f"{datetime.utcnow()}: link product_category has been inserted")
+            # dst_msg = {
+            #     "object_id": str(builder.h_order().h_order_pk),
+            #     "sent_dttm": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            #     "object_type": "order_report",
+            #     "payload": {
+            #         "id": str(builder.h_order().h_order_pk),
+            #         "order_dt": builder.h_order().order_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            #         "status": builder.s_order_status().status,
+            #         "restaurant": {
+            #             "id": str(builder.h_restaurant().h_restaurant_pk),
+            #             "name": builder.s_restaurant_names().name
+            #         },
+            #         "user": {
+            #             "id": str(builder.h_user().h_user_pk),
+            #             "username": builder.s_user_names().username
+            #         },
+            #         "products": self._format_products(builder)
+            #     }
+            # }
 
 
-        user_product_counters_data = self._dds_repository.user_product_counters_prep()
-        user_category_counters_data = self._dds_repository.user_category_counters_prep()
+        user_product_counters_prep_data = self._repository.user_product_counters_prep()
+        user_category_counters_prep_data = self._repository.user_category_counters_prep()
 
-        self._producer.produce(self._cdm_val(user_product_counters_data, 'user_product_counters'))
-        self._producer.produce(self._cdm_val(user_category_counters_data, 'user_category_counters'))
-
-
-        self._logger.info(f"{datetime.utcnow()}: Kafka prepare data for marts has been loaded")
+        self._producer.produce(self._cdm_data_to_json(user_product_counters_prep_data,'user_product_counters', builder))
+        self._producer.produce(self._cdm_data_to_json(user_category_counters_prep_data,'user_category_counters', builder))
 
 
-    def _cdm_val(self, prep_data, mart_name):
+        self._logger.info(f"{datetime.utcnow()}: FINISH")
+
+    def _load_hubs(self, builder: OrderDdsBuilder) -> None:
+        self._repository.h_user_insert(builder.h_user())
+        for p in builder.h_product():
+            self._repository.h_product_insert(p)
+        for c in builder.h_category():
+            self._repository.h_category_insert(c)
+        self._repository.h_restaurant_insert(builder.h_restaurant())
+        self._repository.h_order_insert(builder.h_order())
+
+    def _load_links(self, builder: OrderDdsBuilder) -> None:
+        self._repository.l_order_user_insert(builder.l_order_user())
+        for op_link in builder.l_order_product():
+            self._repository.l_order_product_insert(op_link)
+        for pr_link in builder.l_product_restaurant():
+            self._repository.l_product_restaurant_insert(pr_link)
+        for pc_link in builder.l_product_category():
+            self._repository.l_product_category_insert(pc_link)
+
+    def _load_sats(self, builder: OrderDdsBuilder) -> None:
+        self._repository.s_order_cost_insert(builder.s_order_cost())
+        self._repository.s_order_status_insert(builder.s_order_status())
+        self._repository.s_restaurant_names_insert(builder.s_restaurant_names())
+        self._repository.s_user_names_insert(builder.s_user_names())
+        for pn in builder.s_product_names():
+            self._repository.s_product_names_insert(pn)
+
+    def _format_products(self, builder: OrderDdsBuilder) -> List[Dict]:
+        products = []
+        p_names = {x.h_product_pk: x.name for x in builder.s_product_names()}
+        cat_names = {x.h_category_pk: {"id": str(x.h_category_pk), "name": x.category_name} for x in builder.h_category()}
+        prod_cats = {x.h_product_pk: cat_names[x.h_category_pk] for x in builder.l_product_category()}
+
+        for p in builder.h_product():
+            msg_prod = {
+                "id": str(p.h_product_pk),
+                "name": p_names[p.h_product_pk],
+                "category": prod_cats[p.h_product_pk]
+            }
+            products.append(msg_prod)
+        return products
+    
+    def _cdm_data_to_json(self, prep_data, mart_name, builder: OrderDdsBuilder):
+
         values = []
         for row in prep_data:
                 data = {
@@ -145,18 +126,10 @@ class DdsMessageProcessor:
                         "order_cnt": row[3]
                                     }
                 values.append(data)
-        dst_msg = {"cdm_object": mart_name,
-            "value": values}
-        return dst_msg
-        
-    def _hash_generate(self, text1, text2 = '', text3 = '', text4 = '', text5 = ''):
-        text1 = str(text1)
-        text2 = str(text2)
-        text3 = str(text3)
-        text4 = str(text4)
-        text5 = str(text5)
-        text = text1 + text2 + text3 + text4 + text5
-        hash=0
-        for ch in text:
-            hash = ( hash*281  ^ ord(ch)*997) & 0xFFFFFFFF
-        return hex(hash)[2:].upper().zfill(8) + '-' + hex(hash)[2:6].upper().zfill(4) + '-' + hex(hash)[2:6].upper().zfill(4)  + '-' + hex(hash)[2:6].upper().zfill(4)   + '-' + hex(hash)[2:].upper().zfill(12)
+
+        return {"object_id": str(builder.h_order().h_order_pk),
+                "sent_dttm": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                "object_type": mart_name,
+                "value": values}
+    
+
